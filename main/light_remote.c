@@ -216,6 +216,9 @@ static void kill_timeout(REMOTE_t *remote)
   timer_intr_counter = 1;
   DISABLE_ENCODER
   remote->op_index = op_SNOOZE;
+  tr_espnow_deinit();
+  // go to sleep...
+  
 }
 //
 //
@@ -287,7 +290,50 @@ static void tr_dispatcher(void *arg)
   // this is due to the receiving task taking only tr_espnow_data_t
   // and to update the display, font info is required
   //
-  //xTaskCreate(tr_display_task, "tr_display_task", 4096, (void *)remote, 4, NULL);
+  // the system is coming out of reset
+  // from a deep sleep
+  // this task starts
+  // op_SNOOZE is happens first before the loop
+  // 
+  printf("wake up\n");
+  // wake up
+  pwm_start();
+  // get status
+  update.data.cmd = (uint8_t)op_STATUS;
+ // clear semaphore
+  xSemaphoreTake(tr_recv_sem, 0);
+  tr_espnow_send_task(&update);
+  // wait for response
+  // update will contain the light status
+  // i.e. active plus rgb
+  // should probably figure out a better delay
+  if(xSemaphoreTake(tr_recv_sem, portMAX_DELAY) != pdPASS)
+    printf("AH CRAP!!\n");
+
+  _Clear();
+  // cursor
+  SET_DISP_XY(cursor_position[0], cursor_position[1]);
+  _WriteChar(remote->display, trCursor, _WHITE, _OVERRIDE);
+  remote->light->active = update.data.cmd;
+  if(update.data.cmd == op_ON)
+  {
+    // lights are on
+    // enable encoder
+    ENABLE_ENCODER
+    // set up display for op_ON
+    remote->op_index = op_ON;
+    SET_DISP_XY(op_position[0], op_position[1]);
+    _WriteString(remote->display, trOperation[remote->op_index], _WHITE, _OVERRIDE);
+  }
+  else
+  {
+    // set up display for op_OFF
+    remote->op_index = op_OFF;
+    SET_DISP_XY(op_position[0], op_position[1]);
+    _WriteString(remote->display, trOperation[remote->op_index], _WHITE, _OVERRIDE);
+  }
+  _Screen_Update();
+
   
   while(1)
   {
@@ -296,59 +342,6 @@ static void tr_dispatcher(void *arg)
 printf("op_index : %d\n", current_op_index);
     switch(remote->op_index)
     {
-      case op_SNOOZE:
-        if(remote->encoder->swtch == ENCODER_SWITCH)
-        {
-          printf("wake up\n");
-          // wake up
-          pwm_start();
-          // get status
-          update.data.cmd = (uint8_t)op_STATUS;
-         // clear semaphore
-          xSemaphoreTake(tr_recv_sem, 0);
-          tr_espnow_send_task(&update);
-          // wait for response
-          // update will contain the light status
-          // i.e. active plus rgb
-          // should probably figure out a better delay
-          //if(xQueueReceive(tr_espnow_recv_queue, &update, portMAX_DELAY) != pdPASS)
-          if(xSemaphoreTake(tr_recv_sem, portMAX_DELAY) != pdPASS)
-            printf("AH CRAP!!\n");
-
-          _Clear();
-          // cursor
-          //remote->display->x = 24;
-          //remote->display->y = 1;
-          SET_DISP_XY(cursor_position[0], cursor_position[1]);
-          _WriteChar(remote->display, trCursor, _WHITE, _OVERRIDE);
-          //remote->display->x = 32;
-          remote->light->active = update.data.cmd;
-          //if(remote->light->active == true)
-          if(update.data.cmd == op_ON)
-          {
-            // lights are on
-            // enable encoder
-            ENABLE_ENCODER
-            // set up display for op_ON
-            remote->op_index = op_ON;
-            //remote->display->x = 32;
-            //remote->display->y = 1;            
-            SET_DISP_XY(op_position[0], op_position[1]);
-            _WriteString(remote->display, trOperation[remote->op_index], _WHITE, _OVERRIDE);
-          }
-          else
-          {
-            // set up display for op_OFF
-            remote->op_index = op_OFF;
-            //remote->display->x = 32;
-            //remote->display->y = 1;            
-            SET_DISP_XY(op_position[0], op_position[1]);
-            _WriteString(remote->display, trOperation[remote->op_index], _WHITE, _OVERRIDE);
-          }
-          _Screen_Update();
-        }
-          
-      break;
       case op_OFF:
         if(remote->encoder->swtch == ENCODER_SWITCH)
         {
@@ -363,8 +356,6 @@ printf("op_index : %d\n", current_op_index);
           // enable encoder
           ENABLE_ENCODER
           // set up display for op_ALL
-          //remote->display->x = 32;
-          //remote->display->y = 1;
           remote->op_index = op_ALL;
           SET_DISP_XY(op_position[0], op_position[1]);
           _Clear_String(remote->display, 8, _OVERRIDE);
@@ -389,8 +380,6 @@ printf("op_index : %d\n", current_op_index);
         else
         {
           // set up display for op_ALL
-          //remote->display->x = 32;
-          //remote->display->y = 1;
           remote->op_index = op_ALL;
           SET_DISP_XY(op_position[0], op_position[1]);
           _Clear_String(remote->display, 8, _OVERRIDE);
@@ -421,8 +410,6 @@ printf("op_index : %d\n", current_op_index);
         else // pulse
         {
           remote->op_index = tr_next_operation(remote->op_index);
-          //remote->display->x = 32;
-          //remote->display->y = 1;
           SET_DISP_XY(op_position[0], op_position[1]);
           _Clear_String(remote->display, 8, _OVERRIDE);
           _WriteString(remote->display, trOperation[remote->op_index], _WHITE, _OVERRIDE);
@@ -435,8 +422,6 @@ printf("op_index : %d\n", current_op_index);
         if(remote->encoder->swtch == ENCODER_SWITCH)
         {
           remote->op_index = tr_next_operation(current_op_index);
-          //remote->display->x = 32;
-          //remote->display->y = 1;
           SET_DISP_XY(op_position[0], op_position[1]);
           _Clear_String(remote->display, 8, _OVERRIDE);
           _WriteString(remote->display, trOperation[remote->op_index], _WHITE, _OVERRIDE);
@@ -1138,16 +1123,6 @@ void app_main(void)
   
   _Clear();
   _DrawPixel(0, 0, _WHITE);
-
-  tr_espnow_data_t test;
-  test.data.red = 0x08; // red
-  test.data.green = 0x04; // green
-  test.data.blue = 0x02; // blue
-  test.data.cmd = 0x01; // op_CMD
-  uint8_t tp[] = {0x08, 0x04, 0x02, 0x01}; //(uint8_t *)&test.data.val;
-  ESP_LOGI("Birn", "val : 0x%02x", test.data.val);
-  for(int i=0; i<4; i++)
-    printf("tp[%d] : 0x%02x\n", i, tp[i]);
 
   ESP_LOGI(TAG, "Let's Rock");
   
